@@ -142,7 +142,7 @@ configure() {
   if [[ -f "$INSTALL_DIR/config.json" ]]; then
     local existing
     existing="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$INSTALL_DIR/config.json','utf8')).endpoint||'')" 2>/dev/null || true)"
-    if [[ -n "$existing" && "$existing" != "https://your-api.com/scan" ]]; then
+    if [[ -n "$existing" && "$existing" != "https://your-api.com" ]]; then
       info "Using existing config.json"
       return
     fi
@@ -159,9 +159,9 @@ configure() {
   local cfg_endpoint cfg_device_id cfg_auth_token
   local cfg_serial_path cfg_vendor_id cfg_product_id cfg_baud
 
-  prompt_value cfg_endpoint    "API endpoint URL"            "https://your-api.com/scan"
+  prompt_value cfg_endpoint    "API base URL"                "https://your-api.com"
   prompt_value cfg_device_id   "Device ID"                   "hums-dcs-s116"
-  prompt_value cfg_auth_token  "Auth token (or leave empty)" ""
+  prompt_value cfg_gateway_token "Gateway token (or leave empty)" ""
   echo ""
   info "Serial scanner settings (leave blank to auto-detect):"
   prompt_value cfg_serial_path "Serial device path (e.g. /dev/ttyUSB0)" ""
@@ -178,7 +178,7 @@ configure() {
   "productId": $(json_str "$cfg_product_id"),
   "baudRate": $cfg_baud,
   "endpoint": "$cfg_endpoint",
-  "authToken": $(json_str "$cfg_auth_token"),
+  "gatewayToken": $(json_str "$cfg_gateway_token"),
   "deviceName": "$cfg_device_id",
   "reconnectInterval": 5000,
   "sendRetries": 3,
@@ -192,9 +192,20 @@ EOF
 # ---------- systemd service (Linux) -----------------------------------------
 
 install_systemd_service() {
+  local unit_file="/etc/systemd/system/${SERVICE_NAME}.service"
   info "Installing systemd service..."
 
-  cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
+  # Stop and remove any existing (possibly corrupt) service
+  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    info "Stopping existing service..."
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  fi
+  systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+  rm -f "$unit_file"
+  systemctl daemon-reload
+
+  # Write fresh service file
+  cat > "$unit_file" <<EOF
 [Unit]
 Description=HUMS Card Gateway
 After=network-online.target
@@ -215,10 +226,25 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 EOF
 
+  # Validate the unit file is parseable
+  if ! systemd-analyze verify "$unit_file" 2>/dev/null; then
+    warn "systemd-analyze verify reported warnings (non-fatal)"
+  fi
+
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME"
-  systemctl restart "$SERVICE_NAME"
-  ok "systemd service installed and started"
+  systemctl start "$SERVICE_NAME"
+
+  # Verify the service actually started
+  sleep 2
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    ok "systemd service installed and running"
+  else
+    err "Service failed to start. Check logs: sudo journalctl -u $SERVICE_NAME -e"
+    systemctl status "$SERVICE_NAME" --no-pager || true
+    exit 1
+  fi
+
   info "Manage: sudo systemctl {start|stop|restart|status} $SERVICE_NAME"
   info "Logs:   sudo journalctl -u $SERVICE_NAME -f"
 }
@@ -226,11 +252,17 @@ EOF
 # ---------- launchd service (macOS) -----------------------------------------
 
 install_launchd_service() {
-  local plist_path="$HOME/Library/LaunchAgents/com.hums.card-gateway.plist"
+  local plist_path="$HOME/Library/LaunchAgents/com.hivemakerspace.hums.card-gateway.plist"
+  local label="com.hivemakerspace.hums.card-gateway"
   info "Installing launchd agent..."
+
+  # Unload and remove any existing (possibly corrupt) plist
+  launchctl unload "$plist_path" 2>/dev/null || true
+  rm -f "$plist_path"
 
   mkdir -p "$HOME/Library/LaunchAgents"
 
+  # Write fresh plist
   cat > "$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -238,7 +270,7 @@ install_launchd_service() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.hums.card-gateway</string>
+  <string>${label}</string>
   <key>ProgramArguments</key>
   <array>
     <string>$(command -v node)</string>
@@ -258,9 +290,23 @@ install_launchd_service() {
 </plist>
 EOF
 
-  launchctl unload "$plist_path" 2>/dev/null || true
+  # Validate the plist is well-formed
+  if ! plutil -lint "$plist_path" >/dev/null 2>&1; then
+    err "Generated plist is malformed — this should not happen."
+    exit 1
+  fi
+
   launchctl load "$plist_path"
-  ok "launchd agent installed and loaded"
+
+  # Verify the agent is running
+  sleep 2
+  if launchctl list | grep -q "$label"; then
+    ok "launchd agent installed and running"
+  else
+    err "launchd agent failed to start. Check logs: tail -f /tmp/${SERVICE_NAME}.err.log"
+    exit 1
+  fi
+
   info "Manage: launchctl {load|unload} $plist_path"
   info "Logs:   tail -f /tmp/${SERVICE_NAME}.log"
 }
