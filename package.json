@@ -1,0 +1,12 @@
+{
+  "name": "hums-card-gateway",
+  "version": "1.0.0",
+  "description": "Card scanner gateway for HUMS access control",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "serialport": "^12.0.0"
+  }
+}

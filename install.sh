@@ -108,11 +108,24 @@ download_release() {
 
   cp "$tmp_dir/src/index.js"   "$INSTALL_DIR/src/index.js"
   cp "$tmp_dir/src/parsers.js" "$INSTALL_DIR/src/parsers.js"
+  cp "$tmp_dir/package.json"   "$INSTALL_DIR/package.json"
 
   if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
     cp "$tmp_dir/config.json" "$INSTALL_DIR/config.json"
   else
     info "Existing config.json preserved"
+  fi
+
+  info "Installing npm dependencies..."
+  cd "$INSTALL_DIR" && npm install --omit=dev
+  ok "Dependencies installed"
+
+  # Record installed version for the auto-updater
+  local sha
+  sha="$(curl -fsSL -H 'Accept: application/vnd.github.sha' \
+    "https://api.github.com/repos/${REPO}/commits/${BRANCH}" 2>/dev/null || true)"
+  if [[ -n "$sha" ]]; then
+    echo "$sha" > "$INSTALL_DIR/.version"
   fi
 
   ok "Files installed to $INSTALL_DIR"
@@ -157,7 +170,7 @@ configure() {
   "baudRate": $cfg_baud,
   "endpoint": "$cfg_endpoint",
   "authToken": $(json_str "$cfg_auth_token"),
-  "deviceId": "$cfg_device_id",
+  "deviceName": "$cfg_device_id",
   "reconnectInterval": 5000,
   "sendRetries": 3,
   "sendRetryDelay": 2000

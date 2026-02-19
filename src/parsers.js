@@ -4,7 +4,7 @@
 //   Returns the extracted card identifier on match, or null to pass through.
 //
 // Card formats:
-//   Full:   "1570=903976305=00=6017700001111110"  -> "000111111"
+//   Full:   "1570=900000001=00=6017700001111110"  -> "000111111"
 //           Equals-delimited, extract 601770* segment, strip 9-char prefix,
 //           drop check digit (last char), zero-pad to 9 digits.
 //

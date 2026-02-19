@@ -5,15 +5,17 @@ const crypto = require("crypto");
 const https = require("https");
 const http = require("http");
 const { execSync } = require("child_process");
+const { SerialPort } = require("serialport");
 const { builtinParsers, createCardParser } = require("./parsers");
 
 const PLATFORM = os.platform();
+const ROOT_DIR = path.join(__dirname, "..");
 
 //
 // Config
 //
 
-const CONFIG_PATH = path.join(__dirname, "..", "config.json");
+const CONFIG_PATH = path.join(ROOT_DIR, "config.json");
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -23,7 +25,7 @@ function loadConfig() {
 
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
 
-  for (const key of ["endpoint", "deviceId"]) {
+  for (const key of ["endpoint", "deviceName"]) {
     if (!cfg[key]) {
       console.error(`Missing required config field: "${key}"`);
       process.exit(1);
@@ -37,7 +39,7 @@ function loadConfig() {
     baudRate: cfg.baudRate || 9600,
     endpoint: cfg.endpoint,
     authToken: cfg.authToken || null,
-    deviceId: cfg.deviceId,
+    deviceName: cfg.deviceName,
     reconnectInterval: cfg.reconnectInterval || 5000,
     sendRetries: cfg.sendRetries || 3,
     sendRetryDelay: cfg.sendRetryDelay || 2000,
@@ -79,7 +81,7 @@ function logError(msg, data) {
 const parseCardData = createCardParser(builtinParsers);
 
 //
-// Serial device discovery (zero dependencies)
+// Serial device discovery
 //
 
 function discoverLinuxPorts() {
@@ -111,7 +113,7 @@ function discoverMacPorts() {
   const ports = [];
   try {
     for (const name of fs.readdirSync("/dev")) {
-      if (name.startsWith("tty.usb")) {
+      if (/^tty\.(usb|usbserial|usbmodem)/.test(name)) {
         ports.push({ path: `/dev/${name}`, vendorId: null, productId: null });
       }
     }
@@ -143,25 +145,15 @@ function findSerialPath() {
     }
   }
 
-  // No filter or no match — use first available port
   if (ports.length === 1) return ports[0].path;
-
   return null;
 }
 
 //
-// Serial port open via stty + fs (zero dependencies)
+// Serial connection via serialport npm package
 //
 
-function configurePort(devicePath, baudRate) {
-  const flag = PLATFORM === "darwin" ? "-f" : "-F";
-  execSync(
-    `stty ${flag} ${devicePath} ${baudRate} cs8 -cstopb -parenb raw -echo -echoe -echok`,
-    { stdio: "ignore" }
-  );
-}
-
-let stream = null;
+let port = null;
 let reconnectTimer = null;
 
 function connectScanner() {
@@ -176,19 +168,15 @@ function connectScanner() {
 
   log("Opening serial port", { path: devicePath, baudRate: config.baudRate });
 
-  try {
-    configurePort(devicePath, config.baudRate);
-  } catch (err) {
-    logError("Failed to configure serial port", { error: err.message });
-    reconnectTimer = setTimeout(connectScanner, config.reconnectInterval);
-    return;
-  }
-
-  stream = fs.createReadStream(devicePath, { flags: "r" });
+  port = new SerialPort({
+    path: devicePath,
+    baudRate: config.baudRate,
+    autoOpen: false,
+  });
 
   let buf = "";
 
-  stream.on("data", (chunk) => {
+  port.on("data", (chunk) => {
     buf += chunk.toString("utf8");
 
     while (true) {
@@ -216,23 +204,30 @@ function connectScanner() {
     }
   });
 
-  stream.on("error", (err) => {
-    logError("Serial read error", { error: err.message });
+  port.on("error", (err) => {
+    logError("Serial port error", { error: err.message });
     scheduleReconnect();
   });
 
-  stream.on("close", () => {
-    log("Serial port closed, reconnecting...");
+  port.on("close", () => {
+    log("Serial port closed");
     scheduleReconnect();
   });
 
-  log("Serial port opened — waiting for card scans");
+  port.open((err) => {
+    if (err) {
+      logError("Failed to open serial port", { error: err.message });
+      scheduleReconnect();
+      return;
+    }
+    log("Serial port opened — waiting for card scans");
+  });
 }
 
 function scheduleReconnect() {
-  if (stream) {
-    stream.destroy();
-    stream = null;
+  if (port) {
+    try { port.close(); } catch {}
+    port = null;
   }
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(connectScanner, config.reconnectInterval);
@@ -246,7 +241,7 @@ function sendToServer(scan, attempt = 1) {
   const payload = JSON.stringify({
     id: scan.id,
     cardId: scan.data,
-    deviceId: config.deviceId,
+    deviceName: config.deviceName,
     timestamp: scan.timestamp,
   });
 
@@ -281,7 +276,7 @@ function sendToServer(scan, attempt = 1) {
           retry(scan, attempt);
         }
       });
-    }
+    },
   );
 
   req.on("error", (err) => {
@@ -303,13 +298,123 @@ function retry(scan, attempt) {
 }
 
 //
+// Background auto-updater
+//
+// Periodically checks the GitHub repo for new commits on the main branch.
+// If the remote SHA differs from the locally stored one, downloads the
+// latest tarball, replaces src/, writes the new SHA, and exits.
+// The service manager (systemd / launchd) restarts the process automatically,
+// picking up the new code.
+//
+
+const UPDATE_REPO = "ECEHive/hums-card-gateway";
+const UPDATE_BRANCH = "main";
+const UPDATE_INTERVAL = 5 * 60 * 1000; // check every 5 minutes
+const VERSION_FILE = path.join(ROOT_DIR, ".version");
+const TARBALL_URL = `https://github.com/${UPDATE_REPO}/archive/refs/heads/${UPDATE_BRANCH}.tar.gz`;
+
+function getLocalVersion() {
+  try {
+    return fs.readFileSync(VERSION_FILE, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function fetchRemoteVersion() {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: "api.github.com",
+      path: `/repos/${UPDATE_REPO}/commits/${UPDATE_BRANCH}`,
+      headers: {
+        "User-Agent": "hums-card-gateway",
+        Accept: "application/vnd.github.sha",
+      },
+    };
+
+    https
+      .get(options, (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          resolve(null);
+          return;
+        }
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => resolve(data.trim()));
+      })
+      .on("error", () => resolve(null));
+  });
+}
+
+function applyUpdate() {
+  try {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hums-update-"));
+    execSync(`curl -fsSL "${TARBALL_URL}" | tar -xz -C "${tmpDir}" --strip-components=1`, {
+      stdio: "ignore",
+    });
+
+    // Replace src/ files
+    const srcDir = path.join(tmpDir, "src");
+    for (const file of fs.readdirSync(srcDir)) {
+      fs.copyFileSync(path.join(srcDir, file), path.join(__dirname, file));
+    }
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return true;
+  } catch (err) {
+    logError("Update failed", { error: err.message });
+    return false;
+  }
+}
+
+async function checkForUpdates() {
+  try {
+    const remoteSha = await fetchRemoteVersion();
+    if (!remoteSha) return;
+
+    const localSha = getLocalVersion();
+    if (remoteSha === localSha) return;
+
+    log("Update available", { local: localSha ? localSha.slice(0, 7) : "none", remote: remoteSha.slice(0, 7) });
+
+    if (applyUpdate()) {
+      fs.writeFileSync(VERSION_FILE, remoteSha);
+      log("Update applied, restarting...");
+      // Exit cleanly — the service manager will restart us with the new code
+      process.exit(0);
+    }
+  } catch (err) {
+    logError("Update check error", { error: err.message });
+  }
+}
+
+function startUpdateLoop() {
+  // Write current version on first run if missing
+  if (!getLocalVersion()) {
+    fetchRemoteVersion().then((sha) => {
+      if (sha) {
+        fs.writeFileSync(VERSION_FILE, sha);
+        log("Version recorded", { sha: sha.slice(0, 7) });
+      }
+    });
+  }
+
+  setInterval(checkForUpdates, UPDATE_INTERVAL);
+  log("Auto-updater enabled", { interval: `${UPDATE_INTERVAL / 1000}s` });
+}
+
+//
 // Graceful shutdown
 //
 
 function shutdown(signal) {
   log(`Received ${signal}, shutting down...`);
   clearTimeout(reconnectTimer);
-  if (stream) stream.destroy();
+  if (port) {
+    try { port.close(); } catch {}
+  }
   process.exit(0);
 }
 
@@ -321,5 +426,6 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 //
 
 log("hums-card-gateway starting");
-log("Config", { deviceId: config.deviceId, endpoint: config.endpoint });
+log("Config", { deviceName: config.deviceName, endpoint: config.endpoint });
 connectScanner();
+startUpdateLoop();

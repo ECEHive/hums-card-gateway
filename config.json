@@ -6,7 +6,7 @@
 
   "endpoint": "https://your-api.com/scan",
   "authToken": null,
-  "deviceId": "hums-dcs-s116",
+  "deviceName": "hums-dcs-s116",
 
   "reconnectInterval": 5000,
   "sendRetries": 3,
