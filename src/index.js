@@ -172,6 +172,7 @@ function connectScanner() {
     path: devicePath,
     baudRate: config.baudRate,
     autoOpen: false,
+    hupcl: false,
   });
 
   let buf = "";
@@ -225,9 +226,10 @@ function connectScanner() {
 }
 
 function scheduleReconnect() {
-  if (port) {
-    try { port.close(); } catch {}
-    port = null;
+  const p = port;
+  port = null;
+  if (p && p.isOpen) {
+    try { p.close(); } catch {}
   }
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(connectScanner, config.reconnectInterval);
