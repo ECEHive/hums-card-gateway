@@ -1,0 +1,14 @@
+{
+  "serialPath": null,
+  "vendorId": "09d8",
+  "productId": null,
+  "baudRate": 9600,
+
+  "endpoint": "https://your-api.com/scan",
+  "authToken": null,
+  "deviceId": "hums-dcs-s116",
+
+  "reconnectInterval": 5000,
+  "sendRetries": 3,
+  "sendRetryDelay": 2000
+}
