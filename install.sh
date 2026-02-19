@@ -98,20 +98,19 @@ install_node() {
 download_release() {
   info "Downloading from ${REPO} (${BRANCH})..."
 
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
 
-  curl -fsSL "$TARBALL_URL" | tar -xz -C "$tmp_dir" --strip-components=1
+  curl -fsSL "$TARBALL_URL" | tar -xz -C "$TMP_DIR" --strip-components=1
 
   mkdir -p "$INSTALL_DIR/src"
 
-  cp "$tmp_dir/src/index.js"   "$INSTALL_DIR/src/index.js"
-  cp "$tmp_dir/src/parsers.js" "$INSTALL_DIR/src/parsers.js"
-  cp "$tmp_dir/package.json"   "$INSTALL_DIR/package.json"
+  cp "$TMP_DIR/src/index.js"   "$INSTALL_DIR/src/index.js"
+  cp "$TMP_DIR/src/parsers.js" "$INSTALL_DIR/src/parsers.js"
+  cp "$TMP_DIR/package.json"   "$INSTALL_DIR/package.json"
 
   if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
-    cp "$tmp_dir/config.json" "$INSTALL_DIR/config.json"
+    cp "$TMP_DIR/config.json" "$INSTALL_DIR/config.json"
   else
     info "Existing config.json preserved"
   fi
