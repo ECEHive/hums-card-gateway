@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 # ============================================================================
 # hums-card-gateway — network installer
 #
@@ -16,7 +14,13 @@ set -euo pipefail
 #   2. Downloads the latest code from GitHub
 #   3. Prompts for config values and writes config.json
 #   4. Installs a systemd service (Linux) or launchd plist (macOS)
+#
+# The outer { … } block forces bash to read the entire script into memory
+# before executing, which is required when piped via  curl | bash  so that
+# heredocs are not lost to partial stdin reads.
 # ============================================================================
+{
+set -euo pipefail
 
 REPO="ECEHive/hums-card-gateway"
 BRANCH="main"
@@ -342,3 +346,5 @@ main() {
 }
 
 main "$@"
+exit
+}

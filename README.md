@@ -29,8 +29,8 @@ Edit `/opt/hums-card-gateway/config.json`:
   "vendorId": "09d8",
   "productId": null,
   "baudRate": 9600,
-  "endpoint": "https://your-api.com/scan",
-  "authToken": null,
+  "endpoint": "https://your-api.com",
+  "gatewayToken": null,
   "deviceName": "hums-dcs-s116",
   "reconnectInterval": 5000,
   "sendRetries": 3,
@@ -44,8 +44,8 @@ Edit `/opt/hums-card-gateway/config.json`:
 | `vendorId` | USB vendor ID hex string for auto-detection. |
 | `productId` | USB product ID hex string for auto-detection. |
 | `baudRate` | Serial baud rate. |
-| `endpoint` | URL to POST card scans to. |
-| `authToken` | Optional Bearer token for the endpoint. |
+| `endpoint` | Base URL of the HUMS API (e.g. `https://your-api.com`). |
+| `gatewayToken` | Gateway access token (sent as `X-Gateway-Token` header). |
 | `deviceName` | Identifier for this gateway device. |
 
 After editing, restart the service:
