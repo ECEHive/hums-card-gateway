@@ -41,6 +41,11 @@ need_root() {
 prompt_value() {
   local varname="$1" prompt_text="$2" default="$3"
   local input
+  if [[ ! -t 0 ]]; then
+    # Non-interactive (piped install) — use defaults silently
+    eval "$varname=\"$default\""
+    return
+  fi
   if [[ -n "$default" && "$default" != "null" ]]; then
     read -rp "$prompt_text [$default]: " input
     eval "$varname=\"${input:-$default}\""
@@ -139,6 +144,11 @@ configure() {
     existing="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$INSTALL_DIR/config.json','utf8')).endpoint||'')" 2>/dev/null || true)"
     if [[ -n "$existing" && "$existing" != "https://your-api.com/scan" ]]; then
       info "Using existing config.json"
+      return
+    fi
+    # Non-interactive — keep existing config as-is
+    if [[ ! -t 0 ]]; then
+      info "Non-interactive mode — keeping existing config.json (edit manually later)"
       return
     fi
   fi
