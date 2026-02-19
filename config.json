@@ -4,8 +4,8 @@
   "productId": null,
   "baudRate": 9600,
 
-  "endpoint": "https://your-api.com/scan",
-  "authToken": null,
+  "endpoint": "https://your-api.com",
+  "gatewayToken": null,
   "deviceName": "hums-dcs-s116",
 
   "reconnectInterval": 5000,

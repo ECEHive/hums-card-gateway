@@ -37,8 +37,8 @@ function loadConfig() {
     vendorId: cfg.vendorId || null,
     productId: cfg.productId || null,
     baudRate: cfg.baudRate || 9600,
-    endpoint: cfg.endpoint,
-    authToken: cfg.authToken || null,
+    endpoint: cfg.endpoint.replace(/\/+$/, ""),
+    gatewayToken: cfg.gatewayToken || null,
     deviceName: cfg.deviceName,
     reconnectInterval: cfg.reconnectInterval || 5000,
     sendRetries: cfg.sendRetries || 3,
@@ -239,13 +239,11 @@ function scheduleReconnect() {
 
 function sendToServer(scan, attempt = 1) {
   const payload = JSON.stringify({
-    id: scan.id,
-    cardId: scan.data,
-    deviceName: config.deviceName,
-    timestamp: scan.timestamp,
+    credentialValue: scan.data,
   });
 
-  const url = new URL(config.endpoint);
+  const invokeUrl = `${config.endpoint}/api/rest/control/gateways/invoke`;
+  const url = new URL(invokeUrl);
   const isHttps = url.protocol === "https:";
   const transport = isHttps ? https : http;
 
@@ -253,8 +251,8 @@ function sendToServer(scan, attempt = 1) {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(payload),
   };
-  if (config.authToken) {
-    headers["Authorization"] = `Bearer ${config.authToken}`;
+  if (config.gatewayToken) {
+    headers["X-Gateway-Token"] = config.gatewayToken;
   }
 
   const req = transport.request(
@@ -270,9 +268,33 @@ function sendToServer(scan, attempt = 1) {
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          log("POST OK", { status: res.statusCode, cardId: scan.data });
+          try {
+            const json = JSON.parse(body);
+            if (json.success && json.data) {
+              const d = json.data;
+              log("Gateway invoke OK", {
+                status: res.statusCode,
+                cardId: scan.data,
+                user: d.username || d.userId,
+                results: (d.results || []).length,
+              });
+              for (const r of d.results || []) {
+                if (r.success) {
+                  log("Action succeeded", { controlPoint: r.controlPointName, action: r.action });
+                } else if (r.skipped) {
+                  logWarn("Action skipped", { controlPoint: r.controlPointName, reason: r.skipReason });
+                } else {
+                  logError("Action failed", { controlPoint: r.controlPointName, action: r.action, error: r.error });
+                }
+              }
+            } else {
+              logError("Gateway invoke returned failure", { status: res.statusCode, body });
+            }
+          } catch {
+            log("Gateway invoke OK (non-JSON response)", { status: res.statusCode, cardId: scan.data });
+          }
         } else {
-          logError("POST failed", { status: res.statusCode, cardId: scan.data, body });
+          logError("Gateway invoke failed", { status: res.statusCode, cardId: scan.data, body });
           retry(scan, attempt);
         }
       });
@@ -280,7 +302,7 @@ function sendToServer(scan, attempt = 1) {
   );
 
   req.on("error", (err) => {
-    logError("POST error", { cardId: scan.data, error: err.message });
+    logError("Gateway invoke error", { cardId: scan.data, error: err.message });
     retry(scan, attempt);
   });
 
